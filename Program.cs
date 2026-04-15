@@ -22,8 +22,10 @@ internal sealed class ClockForm : Form
     private readonly ImageRepository _repository;
     private readonly TransitionDirector _transitionDirector;
 
-    private MinuteImage? _currentImage;
-    private MinuteImage? _nextImage;
+    private Bitmap? _currentBitmap;
+    private Bitmap? _nextBitmap;
+    private string? _currentDisplayName;
+    private string? _nextDisplayName;
     private DateTime _currentMinute;
     private DateTime _lastRenderedMinute;
     private string? _statusMessage;
@@ -52,8 +54,11 @@ internal sealed class ClockForm : Form
             else
             {
                 _animationTimer.Stop();
-                _currentImage = _nextImage ?? _currentImage;
-                _nextImage = null;
+                DisposeBitmap(ref _currentBitmap);
+                _currentBitmap = _nextBitmap;
+                _currentDisplayName = _nextDisplayName ?? _currentDisplayName;
+                _nextBitmap = null;
+                _nextDisplayName = null;
                 Invalidate();
             }
         };
@@ -68,8 +73,8 @@ internal sealed class ClockForm : Form
         _repository.Refresh();
         _currentMinute = DateTime.Now.TrimToMinute();
         _lastRenderedMinute = _currentMinute;
-        _currentImage = _repository.ResolveFor(_currentMinute);
-        _statusMessage = _currentImage is null
+        LoadCurrentImage(_repository.ResolveFor(_currentMinute));
+        _statusMessage = _currentBitmap is null
             ? "No matching image found. Add images next to the executable or in Images."
             : null;
 
@@ -84,9 +89,10 @@ internal sealed class ClockForm : Form
             _repository.Refresh();
             _currentMinute = DateTime.Now.TrimToMinute();
             _lastRenderedMinute = _currentMinute;
-            _currentImage = _repository.ResolveFor(_currentMinute);
-            _nextImage = null;
-            _statusMessage = _currentImage is null
+            LoadCurrentImage(_repository.ResolveFor(_currentMinute));
+            DisposeBitmap(ref _nextBitmap);
+            _nextDisplayName = null;
+            _statusMessage = _currentBitmap is null
                 ? "No matching image found after refresh."
                 : null;
             _transitionDirector.Stop();
@@ -115,8 +121,10 @@ internal sealed class ClockForm : Form
         if (resolved is null)
         {
             _statusMessage = $"No image found for {nowMinute:HH:mm}.";
-            _currentImage = null;
-            _nextImage = null;
+            DisposeBitmap(ref _currentBitmap);
+            DisposeBitmap(ref _nextBitmap);
+            _currentDisplayName = null;
+            _nextDisplayName = null;
             _transitionDirector.Stop();
             _animationTimer.Stop();
             Invalidate();
@@ -125,15 +133,22 @@ internal sealed class ClockForm : Form
 
         _statusMessage = null;
 
-        if (_currentImage is null)
+        if (_currentBitmap is null)
         {
-            _currentImage = resolved;
+            LoadCurrentImage(resolved);
             Invalidate();
             return;
         }
 
-        _nextImage = resolved;
-        _transitionDirector.Start(nowMinute, _currentImage.Path, _nextImage.Path);
+        LoadNextImage(resolved);
+        if (_nextBitmap is null)
+        {
+            _statusMessage = $"Unable to load image for {nowMinute:HH:mm}.";
+            Invalidate();
+            return;
+        }
+
+        _transitionDirector.Start(nowMinute, _currentDisplayName ?? "current", _nextDisplayName ?? "next");
         _animationTimer.Start();
         Invalidate();
     }
@@ -160,14 +175,14 @@ internal sealed class ClockForm : Form
             LinearGradientMode.Vertical);
         e.Graphics.FillRectangle(background, bounds);
 
-        if (_currentImage is not null)
+        if (_currentBitmap is not null)
         {
-            DrawImageCover(e.Graphics, _currentImage.Image, bounds, 1f);
+            DrawImageCover(e.Graphics, _currentBitmap, bounds, 1f);
         }
 
-        if (_transitionDirector.IsRunning && _currentImage is not null && _nextImage is not null)
+        if (_transitionDirector.IsRunning && _currentBitmap is not null && _nextBitmap is not null)
         {
-            _transitionDirector.Render(e.Graphics, bounds, _currentImage.Image, _nextImage.Image);
+            _transitionDirector.Render(e.Graphics, bounds, _currentBitmap, _nextBitmap);
         }
 
         DrawOverlay(e.Graphics, bounds);
@@ -177,7 +192,7 @@ internal sealed class ClockForm : Form
     {
         var timeText = _currentMinute == default ? DateTime.Now.ToString("HH:mm") : _currentMinute.ToString("HH:mm");
         var titleText = "Clancy Clock";
-        var infoText = _statusMessage ?? (_currentImage?.DisplayName ?? "Awaiting image");
+        var infoText = _statusMessage ?? (_currentDisplayName ?? "Awaiting image");
 
         using var titleFont = new Font("Segoe UI", 15, FontStyle.Bold);
         using var timeFont = new Font("Segoe UI", 54, FontStyle.Bold);
@@ -247,6 +262,46 @@ internal sealed class ClockForm : Form
         path.CloseFigure();
         return path;
     }
+
+    private void LoadCurrentImage(MinuteImage? resolved)
+    {
+        DisposeBitmap(ref _currentBitmap);
+        _currentDisplayName = null;
+
+        if (resolved is null)
+        {
+            return;
+        }
+
+        _currentBitmap = resolved.LoadBitmap();
+        _currentDisplayName = resolved.DisplayName;
+    }
+
+    private void LoadNextImage(MinuteImage resolved)
+    {
+        DisposeBitmap(ref _nextBitmap);
+        _nextDisplayName = resolved.DisplayName;
+        _nextBitmap = resolved.LoadBitmap();
+    }
+
+    private static void DisposeBitmap(ref Bitmap? bitmap)
+    {
+        bitmap?.Dispose();
+        bitmap = null;
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            DisposeBitmap(ref _currentBitmap);
+            DisposeBitmap(ref _nextBitmap);
+            _clockTimer.Dispose();
+            _animationTimer.Dispose();
+        }
+
+        base.Dispose(disposing);
+    }
 }
 
 internal sealed class ImageRepository
@@ -281,7 +336,6 @@ internal sealed class ImageRepository
                 }
 
                 var keys = BuildKeys(Path.GetFileNameWithoutExtension(file));
-                Image? image = null;
 
                 foreach (var key in keys)
                 {
@@ -290,8 +344,7 @@ internal sealed class ImageRepository
                         continue;
                     }
 
-                    image ??= Image.FromFile(file);
-                    _images[key] = new MinuteImage(file, image, Path.GetFileName(file));
+                    _images[key] = new MinuteImage(file, Path.GetFileName(file));
                 }
             }
         }
@@ -372,14 +425,17 @@ internal sealed class ImageRepository
 
     private void DisposeImages()
     {
-        foreach (var image in _images.Values.Select(value => value.Image).Distinct())
-        {
-            image.Dispose();
-        }
     }
 }
 
-internal sealed record MinuteImage(string Path, Image Image, string DisplayName);
+internal sealed record MinuteImage(string Path, string DisplayName)
+{
+    public Bitmap LoadBitmap()
+    {
+        using var source = Image.FromFile(Path);
+        return new Bitmap(source);
+    }
+}
 
 internal sealed class TransitionDirector
 {
