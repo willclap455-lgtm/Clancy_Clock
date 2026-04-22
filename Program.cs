@@ -308,7 +308,8 @@ internal sealed class ImageRepository
 {
     private static readonly string[] SupportedExtensions = [".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp"];
     private readonly string _baseDirectory;
-    private readonly Dictionary<string, MinuteImage> _images = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, MinuteImage> _hourMinuteImages = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, MinuteImage> _minuteFallbackImages = new(StringComparer.OrdinalIgnoreCase);
 
     public ImageRepository(string baseDirectory)
     {
@@ -318,7 +319,8 @@ internal sealed class ImageRepository
     public void Refresh()
     {
         DisposeImages();
-        _images.Clear();
+        _hourMinuteImages.Clear();
+        _minuteFallbackImages.Clear();
 
         foreach (var directory in EnumerateImageRoots().Distinct(StringComparer.OrdinalIgnoreCase))
         {
@@ -335,16 +337,27 @@ internal sealed class ImageRepository
                     continue;
                 }
 
-                var keys = BuildKeys(Path.GetFileNameWithoutExtension(file));
+                var fileName = Path.GetFileNameWithoutExtension(file);
+                var image = new MinuteImage(file, Path.GetFileName(file));
 
-                foreach (var key in keys)
+                foreach (var key in BuildHourMinuteKeys(fileName))
                 {
-                    if (_images.ContainsKey(key))
+                    if (_hourMinuteImages.ContainsKey(key))
                     {
                         continue;
                     }
 
-                    _images[key] = new MinuteImage(file, Path.GetFileName(file));
+                    _hourMinuteImages[key] = image;
+                }
+
+                foreach (var key in BuildMinuteFallbackKeys(fileName))
+                {
+                    if (_minuteFallbackImages.ContainsKey(key))
+                    {
+                        continue;
+                    }
+
+                    _minuteFallbackImages[key] = image;
                 }
             }
         }
@@ -352,7 +365,7 @@ internal sealed class ImageRepository
 
     public MinuteImage? ResolveFor(DateTime moment)
     {
-        var candidates = new[]
+        var hourMinuteCandidates = new[]
         {
             $"{moment:hhmm}",
             $"{moment:hh_mm}",
@@ -365,16 +378,28 @@ internal sealed class ImageRepository
             $"{moment:HH-mm}",
             $"{moment:HH}:{moment:mm}",
             $"{moment:HH}.{moment:mm}",
-            $"{moment:HH}h{moment:mm}",
+            $"{moment:HH}h{moment:mm}"
+        };
+
+        foreach (var candidate in hourMinuteCandidates)
+        {
+            if (_hourMinuteImages.TryGetValue(Normalize(candidate), out var image))
+            {
+                return image;
+            }
+        }
+
+        var minuteCandidates = new[]
+        {
             $"{moment:mm}",
             $"{moment.Minute}",
             $"minute-{moment:mm}",
             $"minute-{moment.Minute}"
         };
 
-        foreach (var candidate in candidates)
+        foreach (var candidate in minuteCandidates)
         {
-            if (_images.TryGetValue(Normalize(candidate), out var image))
+            if (_minuteFallbackImages.TryGetValue(Normalize(candidate), out var image))
             {
                 return image;
             }
@@ -396,27 +421,96 @@ internal sealed class ImageRepository
         }
     }
 
-    private static IEnumerable<string> BuildKeys(string fileNameWithoutExtension)
+    private static IEnumerable<string> BuildHourMinuteKeys(string fileNameWithoutExtension)
     {
         var normalized = Normalize(fileNameWithoutExtension);
-        yield return normalized;
-
-        var digits = new string(normalized.Where(char.IsDigit).ToArray());
-        if (string.IsNullOrWhiteSpace(digits))
+        if (!TryGetHourMinuteKey(normalized, out var digits))
         {
             yield break;
         }
 
+        yield return normalized;
         yield return digits;
+    }
 
-        if (digits.Length >= 4)
+    private static IEnumerable<string> BuildMinuteFallbackKeys(string fileNameWithoutExtension)
+    {
+        var normalized = Normalize(fileNameWithoutExtension);
+        if (!TryGetMinuteKey(normalized, out var minute))
         {
-            yield return digits[^2..];
+            yield break;
         }
-        else
+
+        yield return minute;
+    }
+
+    private static bool TryGetHourMinuteKey(string normalized, out string digits)
+    {
+        digits = string.Empty;
+
+        if (string.IsNullOrWhiteSpace(normalized) || normalized.StartsWith("minute", StringComparison.OrdinalIgnoreCase))
         {
-            yield return digits.PadLeft(2, '0');
+            return false;
         }
+
+        var numeric = new string(normalized.Where(char.IsDigit).ToArray());
+        if (numeric.Length is not 3 and not 4)
+        {
+            return false;
+        }
+
+        var padded = numeric.PadLeft(4, '0');
+        if (!int.TryParse(padded[..2], out var hour) || !int.TryParse(padded[2..], out var minute))
+        {
+            return false;
+        }
+
+        if (hour is < 0 or > 23 || minute is < 0 or > 59)
+        {
+            return false;
+        }
+
+        digits = padded;
+        return true;
+    }
+
+    private static bool TryGetMinuteKey(string normalized, out string minuteKey)
+    {
+        minuteKey = string.Empty;
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return false;
+        }
+
+        var digits = new string(normalized.Where(char.IsDigit).ToArray());
+        if (normalized.StartsWith("minute", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!TryParseMinute(digits, out minuteKey))
+            {
+                return false;
+            }
+
+            return true;
+        }
+
+        if (digits.Length is 0 or > 2 || digits.Length != normalized.Length)
+        {
+            return false;
+        }
+
+        return TryParseMinute(digits, out minuteKey);
+    }
+
+    private static bool TryParseMinute(string digits, out string minuteKey)
+    {
+        minuteKey = string.Empty;
+        if (!int.TryParse(digits, out var minute) || minute is < 0 or > 59)
+        {
+            return false;
+        }
+
+        minuteKey = minute.ToString("00");
+        return true;
     }
 
     private static string Normalize(string value)

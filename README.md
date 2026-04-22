@@ -39,6 +39,7 @@ Supported filename styles include:
 If you have a 12-hour image set, name files with `hhmm` so 2:24 PM maps to `0224`.
 
 If you only have one image per minute regardless of hour, naming the files `00` through `59` is enough.
+Four-digit filenames such as `0138.jpg` are treated only as hour+minute images, not as generic minute `38` fallbacks.
 
 ## Running locally on Windows
 
