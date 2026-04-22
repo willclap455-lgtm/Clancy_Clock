@@ -20,6 +20,12 @@ Supported file extensions:
 
 Supported filename styles include:
 
+- `hhmm` -> `0237.png`
+- `hh_mm` -> `02_37.jpg`
+- `hh-mm` -> `02-37.webp`
+- `hh:mm` -> `02:37.png`
+- `hh.mm` -> `02.37.png`
+- `hhhmm` -> `02h37.png`
 - `HHmm` -> `1437.png`
 - `HH_mm` -> `14_37.jpg`
 - `HH-mm` -> `14-37.webp`
@@ -29,6 +35,8 @@ Supported filename styles include:
 - `mm` -> `37.png`
 - `m` -> `7.png`
 - `minute-mm` -> `minute-37.png`
+
+If you have a 12-hour image set, name files with `hhmm` so 2:24 PM maps to `0224`.
 
 If you only have one image per minute regardless of hour, naming the files `00` through `59` is enough.
 

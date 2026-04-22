@@ -354,6 +354,12 @@ internal sealed class ImageRepository
     {
         var candidates = new[]
         {
+            $"{moment:hhmm}",
+            $"{moment:hh_mm}",
+            $"{moment:hh-mm}",
+            $"{moment:hh}:{moment:mm}",
+            $"{moment:hh}.{moment:mm}",
+            $"{moment:hh}h{moment:mm}",
             $"{moment:HHmm}",
             $"{moment:HH_mm}",
             $"{moment:HH-mm}",
