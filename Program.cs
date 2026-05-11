@@ -17,6 +17,9 @@ internal static class Program
 
 internal sealed class ClockForm : Form
 {
+    private const int WmNcLButtonDoubleClick = 0x00A3;
+    private const int HtCaption = 2;
+
     private readonly System.Windows.Forms.Timer _clockTimer;
     private readonly System.Windows.Forms.Timer _animationTimer;
     private readonly ImageRepository _repository;
@@ -66,6 +69,17 @@ internal sealed class ClockForm : Form
         Load += (_, _) => InitializeClock();
         Resize += (_, _) => Invalidate();
         KeyDown += OnKeyDown;
+    }
+
+    protected override void WndProc(ref Message m)
+    {
+        if (m.Msg == WmNcLButtonDoubleClick && m.WParam.ToInt32() == HtCaption)
+        {
+            HideTitleBar();
+            return;
+        }
+
+        base.WndProc(ref m);
     }
 
     private void InitializeClock()
@@ -177,7 +191,7 @@ internal sealed class ClockForm : Form
 
         if (_currentBitmap is not null)
         {
-            DrawImageCover(e.Graphics, _currentBitmap, bounds, 1f);
+            DrawImageFit(e.Graphics, _currentBitmap, bounds, 1f);
         }
 
         if (_transitionDirector.IsRunning && _currentBitmap is not null && _nextBitmap is not null)
@@ -214,41 +228,61 @@ internal sealed class ClockForm : Form
         graphics.DrawString(infoText, infoFont, subtleBrush, panelRect.X + 20, panelRect.Bottom - 30);
     }
 
-    internal static void DrawImageCover(Graphics graphics, Image image, Rectangle bounds, float opacity)
+    internal static void DrawImageFit(Graphics graphics, Image image, Rectangle bounds, float opacity)
     {
-        var sourceRect = CalculateCoverSource(image.Size, bounds.Size);
+        var destinationRect = CalculateFitDestination(image.Size, bounds);
+        if (destinationRect.IsEmpty)
+        {
+            return;
+        }
+
         using var attributes = new ImageAttributes();
         var matrix = new ColorMatrix
         {
             Matrix33 = Math.Clamp(opacity, 0f, 1f)
         };
         attributes.SetColorMatrix(matrix);
+
         graphics.DrawImage(
             image,
-            bounds,
-            sourceRect.X,
-            sourceRect.Y,
-            sourceRect.Width,
-            sourceRect.Height,
+            destinationRect,
+            0,
+            0,
+            image.Width,
+            image.Height,
             GraphicsUnit.Pixel,
             attributes);
     }
 
-    private static Rectangle CalculateCoverSource(Size imageSize, Size targetSize)
+    private static Rectangle CalculateFitDestination(Size imageSize, Rectangle bounds)
     {
-        var imageRatio = imageSize.Width / (float)Math.Max(imageSize.Height, 1);
-        var targetRatio = targetSize.Width / (float)Math.Max(targetSize.Height, 1);
-
-        if (imageRatio > targetRatio)
+        if (imageSize.Width <= 0 || imageSize.Height <= 0 || bounds.Width <= 0 || bounds.Height <= 0)
         {
-            var width = (int)(imageSize.Height * targetRatio);
-            var x = (imageSize.Width - width) / 2;
-            return new Rectangle(x, 0, width, imageSize.Height);
+            return Rectangle.Empty;
         }
 
-        var height = (int)(imageSize.Width / Math.Max(targetRatio, 0.001f));
-        var y = (imageSize.Height - height) / 2;
-        return new Rectangle(0, y, imageSize.Width, height);
+        var scale = Math.Min(
+            bounds.Width / (float)imageSize.Width,
+            bounds.Height / (float)imageSize.Height);
+        var width = Math.Max(1, (int)MathF.Round(imageSize.Width * scale));
+        var height = Math.Max(1, (int)MathF.Round(imageSize.Height * scale));
+        var x = bounds.X + (bounds.Width - width) / 2;
+        var y = bounds.Y + (bounds.Height - height) / 2;
+
+        return new Rectangle(x, y, width, height);
+    }
+
+    private void HideTitleBar()
+    {
+        if (FormBorderStyle == FormBorderStyle.None)
+        {
+            return;
+        }
+
+        var previousWindowState = WindowState;
+        FormBorderStyle = FormBorderStyle.None;
+        WindowState = previousWindowState;
+        Invalidate();
     }
 
     private static GraphicsPath RoundedRect(RectangleF bounds, float radius)
@@ -599,7 +633,7 @@ internal sealed class TransitionDirector
         DrawOrbitals(graphics, bounds, reveal);
 
         var nextOpacity = Math.Clamp((progress - 0.1f) / 0.9f, 0f, 1f);
-        ClockForm.DrawImageCover(graphics, next, bounds, nextOpacity);
+        ClockForm.DrawImageFit(graphics, next, bounds, nextOpacity);
 
         DrawBlooms(graphics, bounds, reveal);
         DrawAureole(graphics, bounds, reveal);
@@ -697,7 +731,7 @@ internal sealed class TransitionDirector
 
             var opacity = Math.Clamp(0.14f + burst * 1.1f - local * 0.15f, 0f, 1f);
             var source = local < 0.52f ? current : next;
-            ClockForm.DrawImageCover(graphics, source, bounds, opacity);
+            ClockForm.DrawImageFit(graphics, source, bounds, opacity);
             graphics.Restore(state);
 
             using var outlinePen = new Pen(Color.FromArgb((int)(120 * (1f - local)), 255, 255, 255), 1.2f);
